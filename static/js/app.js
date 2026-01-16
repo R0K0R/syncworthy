@@ -1191,6 +1191,104 @@ const app = {
         event.target.value = ''; // Reset input
     },
 
+    toggleNewDropdown: function () {
+        const menu = document.getElementById('new-dropdown-menu');
+        if (menu) {
+            menu.classList.toggle('visible');
+
+            // Close when clicking outside
+            if (menu.classList.contains('visible')) {
+                setTimeout(() => {
+                    const closeHandler = (e) => {
+                        if (!e.target.closest('#new-dropdown')) {
+                            menu.classList.remove('visible');
+                            document.removeEventListener('click', closeHandler);
+                        }
+                    };
+                    document.addEventListener('click', closeHandler);
+                }, 10);
+            }
+        }
+        if (window.lucide) lucide.createIcons();
+    },
+
+    createNewFile: async function () {
+        // Close dropdown
+        const menu = document.getElementById('new-dropdown-menu');
+        if (menu) menu.classList.remove('visible');
+
+        // Determine parent directory
+        let parentDir = 'content';
+        if (this.state.activeFile) {
+            const parts = this.state.activeFile.split('/');
+            parts.pop(); // Remove filename
+            if (parts.length > 0) parentDir = parts.join('/');
+        }
+
+        const filename = prompt('Enter filename:', 'new-file.typ');
+        if (!filename) return;
+
+        const path = `${parentDir}/${filename}`;
+
+        try {
+            const res = await fetch('/api/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path, content: '' })
+            });
+
+            if (res.ok) {
+                this.showSaveStatus('File Created');
+                await this.refreshTree();
+                // Open the new file
+                this.openFile(path);
+            } else {
+                this.showSaveStatus('Create Failed');
+            }
+        } catch (e) {
+            console.error('Create file error:', e);
+            this.showSaveStatus('Create Error');
+        }
+    },
+
+    createNewFolder: async function () {
+        // Close dropdown
+        const menu = document.getElementById('new-dropdown-menu');
+        if (menu) menu.classList.remove('visible');
+
+        // Determine parent directory
+        let parentDir = 'content';
+        if (this.state.activeFile) {
+            const parts = this.state.activeFile.split('/');
+            parts.pop(); // Remove filename
+            if (parts.length > 0) parentDir = parts.join('/');
+        }
+
+        const foldername = prompt('Enter folder name:', 'new-folder');
+        if (!foldername) return;
+
+        const path = `${parentDir}/${foldername}/.gitkeep`;
+
+        try {
+            // Create a .gitkeep file inside the folder to create the directory
+            const res = await fetch('/api/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path, content: '' })
+            });
+
+            if (res.ok) {
+                this.showSaveStatus('Folder Created');
+                await this.refreshTree();
+            } else {
+                this.showSaveStatus('Create Failed');
+            }
+        } catch (e) {
+            console.error('Create folder error:', e);
+            this.showSaveStatus('Create Error');
+        }
+    },
+
     renameFile: function () {
         const path = this.state.contextMenuFile;
         if (!path) return;
@@ -1268,6 +1366,45 @@ const app = {
         input.addEventListener('blur', () => {
             finishRename(true);
         });
+    },
+
+    moveFile: async function () {
+        const path = this.state.contextMenuFile;
+        if (!path) return;
+
+        const filename = path.split('/').pop();
+        const newPath = prompt(`Move "${filename}" to new path:`, path);
+
+        if (!newPath || newPath === path) return;
+
+        try {
+            // Use rename API since it supports full path changes
+            const res = await fetch('/api/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    path,
+                    newName: newPath.split('/').pop(),
+                    newPath: newPath  // Full new path
+                })
+            });
+            const result = await res.json();
+
+            if (result.success) {
+                this.showSaveStatus('File Moved');
+                this.refreshTree();
+                // Update active file if it was moved
+                if (this.state.activeFile === path) {
+                    this.state.activeFile = result.newPath || newPath;
+                    document.getElementById('active-filename').textContent = result.newPath || newPath;
+                }
+            } else {
+                this.showSaveStatus(result.error || 'Move Failed');
+            }
+        } catch (e) {
+            console.error('Move error:', e);
+            this.showSaveStatus('Move Error');
+        }
     },
 
     deleteFile: async function () {
@@ -3305,59 +3442,54 @@ const app = {
 
     renderInfoTab: function (container) {
         container.innerHTML = `
-            <div class="config-section">
-                <pre style="font-family: 'JetBrains Mono', monospace; font-size: 16px; line-height: 1.2; color: var(--accent-primary); margin-bottom: 24px;">${this.ASCII_LOGO}</pre>
+            <div class="config-section" style="text-align: center; padding: 32px 24px;">
+                <pre style="font-family: 'JetBrains Mono', monospace; font-size: 14px; line-height: 1.2; color: var(--accent-primary); margin-bottom: 16px; display: inline-block;">${this.ASCII_LOGO}</pre>
                 
-                <h1 style="font-family: var(--font-display); font-size: 32px; font-weight: 700; margin-bottom: 8px;">Noteworthy</h1>
-                <p style="color: var(--text-muted); margin-bottom: 24px;">A modular Typst template system</p>
+                <h1 style="font-family: var(--font-display); font-size: 28px; font-weight: 700; margin-bottom: 4px;">Noteworthy</h1>
+                <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 14px;">A modular Typst template system</p>
                 
-                <div style="background: var(--bg-secondary); border-radius: 8px; padding: 12px 24px; margin-bottom: 32px;">
-                    <span style="color: var(--text-muted);">Version</span>
-                    <span style="font-family: 'JetBrains Mono', monospace; font-weight: 600; margin-left: 8px;">0.1.0</span>
-                </div>
+                <span style="background: var(--bg-secondary); border-radius: 6px; padding: 6px 16px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">v0.1.0</span>
             </div>
             
-            <div class="config-section">
-                <h3>Made By</h3>
-                <ul style="margin-top: 12px; list-style: none; padding: 0;">
-                    <li style="margin-bottom: 8px;"><strong>Benjamin Lee</strong> — Creator & Developer</li>
-                    <li><strong>Hojun Lee</strong> — Developer</li>
-                </ul>
+            <div class="config-section" style="display: flex; justify-content: center; gap: 24px; padding: 16px 24px; flex-wrap: wrap;">
+                <a href="https://noteworthy.benjaminlee.kr/docs.html" target="_blank" class="info-link">
+                    <i data-lucide="book-open"></i> Docs
+                </a>
+                <a href="https://github.com/sihooleebd/noteworthy" target="_blank" class="info-link">
+                    <i data-lucide="github"></i> GitHub
+                </a>
+                <a href="https://typst.app" target="_blank" class="info-link">
+                    <i data-lucide="external-link"></i> Typst
+                </a>
             </div>
             
-            <div class="config-section">
-                <h3>Special Thanks</h3>
-                <p style="color: var(--text-muted); margin-top: 8px;">
-                    <!-- Add special thanks here -->
+            <div class="config-section" style="text-align: center; padding: 16px 24px; border-top: 1px solid var(--border-color);">
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                    Created by <strong>Benjamin Lee</strong> & <strong>Hojun Lee</strong>
+                </p>
+                <p style="font-size: 11px; color: var(--text-muted);">
+                    © 2024-2026 · Built with Typst, FastAPI & Monaco
                 </p>
             </div>
             
-            <div class="config-section">
-                <h3>Useful Links</h3>
-                <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
-                    <a href="https://noteworthy.benjaminlee.kr/docs.html" target="_blank" style="display: flex; align-items: center; gap: 8px; color: var(--accent-primary); text-decoration: none;">
-                        <i data-lucide="book-open" style="width: 18px; height: 18px;"></i>
-                        Documentation
-                    </a>
-                    <a href="https://github.com/sihooleebd/noteworthy" target="_blank" style="display: flex; align-items: center; gap: 8px; color: var(--accent-primary); text-decoration: none;">
-                        <i data-lucide="github" style="width: 18px; height: 18px;"></i>
-                        GitHub Repository
-                    </a>
-                    <a href="https://typst.app" target="_blank" style="display: flex; align-items: center; gap: 8px; color: var(--accent-primary); text-decoration: none;">
-                        <i data-lucide="external-link" style="width: 18px; height: 18px;"></i>
-                        Typst Official
-                    </a>
-                </div>
-            </div>
-            
-            <div class="config-section" style="border-top: 1px solid var(--border-color); margin-top: 32px; padding-top: 24px;">
-                <p style="font-size: 12px; color: var(--text-muted);">
-                    © 2024-2026 Noteworthy. Built with ❤️ using Typst, FastAPI, and Monaco Editor.
-                </p>
-            </div>
+            <style>
+                .info-link {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    color: var(--accent-primary);
+                    text-decoration: none;
+                    font-size: 14px;
+                    padding: 8px 16px;
+                    background: var(--bg-secondary);
+                    border-radius: 8px;
+                    transition: opacity 0.2s;
+                }
+                .info-link:hover { opacity: 0.8; }
+                .info-link i { width: 16px; height: 16px; }
+            </style>
         `;
 
-        // Re-render Lucide icons for the links
         if (typeof lucide !== 'undefined') {
             lucide.createIcons();
         }

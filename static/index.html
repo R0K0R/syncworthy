@@ -35,6 +35,19 @@
                     <div class="sidebar-header">
                         <h3>Explorer</h3>
                         <div class="sidebar-actions">
+                            <div class="dropdown" id="new-dropdown">
+                                <button class="icon-btn" onclick="app.toggleNewDropdown()" title="New...">
+                                    <i data-lucide="plus"></i>
+                                </button>
+                                <div class="dropdown-menu" id="new-dropdown-menu">
+                                    <button class="dropdown-item" onclick="app.createNewFile()">
+                                        <i data-lucide="file-plus"></i> New File
+                                    </button>
+                                    <button class="dropdown-item" onclick="app.createNewFolder()">
+                                        <i data-lucide="folder-plus"></i> New Folder
+                                    </button>
+                                </div>
+                            </div>
                             <button class="icon-btn" onclick="app.uploadFiles()" title="Upload Files">
                                 <i data-lucide="upload"></i>
                             </button>
@@ -275,6 +288,10 @@
         <button class="context-menu-item" onclick="app.renameFile()">
             <i data-lucide="pencil"></i>
             Rename
+        </button>
+        <button class="context-menu-item" onclick="app.moveFile()">
+            <i data-lucide="folder-input"></i>
+            Move
         </button>
         <button class="context-menu-item danger" onclick="app.deleteFile()">
             <i data-lucide="trash-2"></i>

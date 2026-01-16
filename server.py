@@ -313,12 +313,16 @@ def delete_file(data: dict = Body(...)):
 
 @app.post("/api/rename")
 def rename_file(data: dict = Body(...)):
-    """Rename a file relative to project root."""
+    """Rename or move a file relative to project root."""
     path = data.get("path")
     new_name = data.get("newName")
+    new_path = data.get("newPath")  # Optional: full new path for move operations
     
-    if not path or not new_name:
-        return {"success": False, "error": "Missing path or newName"}
+    if not path:
+        return {"success": False, "error": "Missing path"}
+    
+    if not new_name and not new_path:
+        return {"success": False, "error": "Missing newName or newPath"}
     
     source = BASE_DIR / path
     if not source.exists():
@@ -330,18 +334,31 @@ def rename_file(data: dict = Body(...)):
     except ValueError:
         return {"success": False, "error": "Invalid path"}
     
-    # Calculate new path
-    parent_dir = source.parent
-    dest = parent_dir / new_name
+    # Calculate destination path
+    if new_path:
+        # Full path move
+        dest = BASE_DIR / new_path
+    else:
+        # Simple rename in same directory
+        parent_dir = source.parent
+        dest = parent_dir / new_name
+    
+    # Security check - ensure destination is within project
+    try:
+        dest.resolve().relative_to(BASE_DIR.resolve())
+    except ValueError:
+        return {"success": False, "error": "Invalid destination path"}
     
     # Check if destination already exists
     if dest.exists():
         return {"success": False, "error": "A file with that name already exists"}
     
     try:
+        # Create destination directory if it doesn't exist
+        dest.parent.mkdir(parents=True, exist_ok=True)
         source.rename(dest)
-        new_path = str(dest.relative_to(BASE_DIR))
-        return {"success": True, "newPath": new_path}
+        result_path = str(dest.relative_to(BASE_DIR))
+        return {"success": True, "newPath": result_path}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
