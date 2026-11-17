@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Noteworthy Studio</title>
-    <link rel="stylesheet" href="css/main.css?v=8">
+    <title>Syncworthy</title>
+    <link rel="stylesheet" href="css/main.css?v=9">
     <link rel="stylesheet" href="css/collab.css">
     <script src="https://unpkg.com/lucide@latest"></script>
     <link
@@ -101,7 +101,7 @@
                     <div id="preview-container">
                         <div class="preview-placeholder">
                             <i data-lucide="eye"></i>
-                            <span>Select a .typ file</span>
+                            <span id="preview-placeholder-text">Select a file</span>
                         </div>
                     </div>
                 </aside>
@@ -111,16 +111,7 @@
             <div class="page" id="page-config">
                 <div class="config-layout">
                     <aside class="config-sidebar glass">
-                        <button class="config-tab active" data-tab="metadata">Metadata</button>
-                        <button class="config-tab" data-tab="constants">Theme & Display</button>
-                        <button class="config-tab" data-tab="hierarchy">Structure</button>
-                        <button class="config-tab" data-tab="schemes">Color Themes</button>
-                        <button class="config-tab" data-tab="snippets">Snippets</button>
-                        <button class="config-tab" data-tab="preface">Preface</button>
-                        <button class="config-tab" data-tab="ignored">Ignored</button>
-                        <button class="config-tab" data-tab="modules">Modules</button>
-                        <button class="config-tab" data-tab="session">Session</button>
-                        <button class="config-tab" data-tab="info">Info</button>
+                        <!-- tabs are filled in from the settings registry (js/modules/settings.js) -->
                     </aside>
                     <section class="config-content glass" id="config-content">
                         <!-- Dynamic content -->
@@ -128,50 +119,7 @@
                 </div>
             </div>
 
-            <!-- BUILD PAGE -->
-            <div class="page" id="page-build">
-                <section class="config-content glass">
-                    <div class="config-section">
-                        <h3>Build Document</h3>
-                        <p>Select chapters and pages to include in the build</p>
-                    </div>
-
-                    <div class="build-options-bar">
-                        <label class="toggle-option">
-                            <input type="checkbox" id="build-opt-frontmatter" checked>
-                            <span>Frontmatter</span>
-                        </label>
-                        <label class="toggle-option">
-                            <input type="checkbox" id="build-opt-covers" checked>
-                            <span>Chapter Covers</span>
-                        </label>
-                        <button class="btn btn-ghost" onclick="app.toggleAllBuildPages()">
-                            Toggle All
-                        </button>
-                    </div>
-
-                    <div class="build-grid" id="build-grid">
-                        <!-- JS renders: chapter rows with page checkboxes -->
-                    </div>
-
-                    <div class="build-progress" id="build-progress-new" style="display: none;">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progress-fill-new" style="width: 0%;"></div>
-                        </div>
-                        <div class="progress-info">
-                            <span id="progress-page-new">Preparing...</span>
-                            <span id="progress-percent-new">0%</span>
-                        </div>
-                    </div>
-
-                    <div class="build-footer">
-                        <button class="btn btn-primary" id="build-btn-new" onclick="app.runBuild()">
-                            <i data-lucide="zap"></i>
-                            Build PDF
-                        </button>
-                    </div>
-                </section>
-            </div>
+            <!-- Plugin pages (builds, actions, ...) are added here by app.registerPage() -->
         </div>
 
         <!-- macOS DOCK -->
@@ -192,13 +140,6 @@
                     <span class="dock-dot"></span>
                 </div>
 
-                <div class="dock-item" data-page="build" onclick="app.showPage('build')">
-                    <div class="dock-icon">
-                        <i data-lucide="package"></i>
-                    </div>
-                    <span class="dock-label">Build</span>
-                    <span class="dock-dot"></span>
-                </div>
                 <!-- Chat Dock Item -->
                 <div class="dock-item" id="dock-chat-btn" onclick="app.toggleChat()">
                     <div class="dock-icon" style="position: relative;">
@@ -211,49 +152,6 @@
             </div>
         </div>
 
-        <!-- BUILD MODAL -->
-        <div class="modal-overlay" id="build-modal">
-            <div class="modal">
-                <div class="modal-header">
-                    <h2>Build Document</h2>
-                    <button class="modal-close" onclick="app.closeBuildModal()">
-                        <i data-lucide="x"></i>
-                    </button>
-                </div>
-
-                <div class="build-options" style="justify-content: flex-start; gap: 24px;">
-                    <label class="toggle-option">
-                        <input type="checkbox" id="opt-frontmatter" checked>
-                        <span>Frontmatter</span>
-                    </label>
-                    <label class="toggle-option">
-                        <input type="checkbox" id="opt-covers" checked>
-                        <span>Chapter Covers</span>
-                    </label>
-                </div>
-
-                <div class="build-grid glass" id="build-grid" style="max-height: 300px;"></div>
-
-                <div class="build-progress" id="build-progress" style="display: none;">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progress-fill" style="width: 0%;"></div>
-                    </div>
-                    <div class="progress-info">
-                        <span id="progress-page">Preparing...</span>
-                        <span id="progress-percent">0%</span>
-                    </div>
-                </div>
-
-                <div class="build-actions" style="margin-top: 24px;">
-                    <button class="btn btn-primary" id="build-btn" onclick="app.runBuild()">
-                        <i data-lucide="zap"></i>
-                        Build PDF
-                    </button>
-                </div>
-
-                <div class="build-log glass" id="build-log" style="margin-top: 16px; display: none;"></div>
-            </div>
-        </div>
     </div>
 
     <!-- File Context Menu -->
@@ -288,14 +186,15 @@
     <!-- Hidden file input for uploads -->
     <input type="file" id="file-upload-input" multiple style="display: none;" onchange="app.handleFileUpload(event)">
 
-    <!-- Modules (loaded before app.js so mixins are available) -->
+    <!-- Core modules (loaded before app.js so mixins are available).  Plugin
+         bundles are loaded after these, from /plugins/<name>/, by app.boot(). -->
     <script src="js/modules/utils.js"></script>
+    <script src="js/modules/plugin_api.js"></script>
     <script src="js/modules/file_tree.js"></script>
     <script src="js/modules/collab.js"></script>
-    <script src="js/modules/config.js"></script>
-    <script src="js/modules/build.js"></script>
+    <script src="js/modules/settings.js"></script>
+    <script src="js/modules/actions.js"></script>
     <script src="js/modules/chat.js"></script>
-    <script src="js/modules/preview.js"></script>
     <!-- Core app -->
     <script src="js/app.js"></script>
     <script>

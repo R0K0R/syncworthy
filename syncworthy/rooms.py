@@ -1,33 +1,29 @@
 """
-Yjs/CRDT WebSocket Provider for Noteworthy GUI
+Rooms: the Yjs/CRDT side of Syncworthy.
 
-Uses pycrdt-websocket for collaborative editing with CRDT-based conflict resolution.
-This runs alongside the existing document hub for presence/cursor sharing.
+One room per file path, each holding the document as a Yjs Text and exporting it
+to the file on a debounce (atomic writes).  The CRDT state itself is kept in the
+project's state directory, so a restart restores the same document identity and
+clients that reconnect converge instead of duplicating the text.
 
-Updated for pycrdt-websocket 0.16+ API.
+Uses pycrdt-websocket 0.16+.  The project root and the state directory are
+passed in (see ``RoomManager``); nothing here knows about a particular kind of
+project.
 """
 import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Optional, Callable, Awaitable, Any
+from typing import Dict, Optional
 from pycrdt import Doc, Text
 from pycrdt.websocket import WebsocketServer, ASGIServer
 from pycrdt.websocket.yroom import YRoom
 
-from ..config import BASE_DIR
-log = logging.getLogger("noteworthy.gui")
-
-_packet_logging_enabled = os.environ.get("NOTEWORTHY_PACKET_LOG", "").lower() in {"1", "true", "yes", "on"}
+log = logging.getLogger("syncworthy")
 
 
-def set_packet_logging(enabled: bool):
-    """Enable/disable low-level Yjs websocket packet logging."""
-    global _packet_logging_enabled
-    _packet_logging_enabled = bool(enabled)
-
-
-CRDT_STATE_DIR = BASE_DIR / ".noteworthy-crdt"
+def _env_flag(*names: str) -> bool:
+    return any(os.environ.get(n, "").lower() in {"1", "true", "yes", "on"} for n in names)
 
 
 class _NullLock:
@@ -43,25 +39,25 @@ class _NullLock:
 _NULL_LOCK = _NullLock()
 
 
-def _state_path(room_name: str) -> Path:
+def _state_path(state_dir: Path, room_name: str) -> Path:
     """Where this room's CRDT state blob lives, mirroring the content path."""
-    return CRDT_STATE_DIR / (room_name + ".bin")
+    return state_dir / (room_name + ".bin")
 
 
-def _resolve_room_path(room_name: str) -> Path | None:
-    """Resolve a websocket room name to a path inside BASE_DIR.
+def _resolve_room_path(root: Path, room_name: str) -> Path | None:
+    """Resolve a websocket room name to a path inside ROOT.
 
     Room names come straight from the /yjs websocket URL (untrusted client
-    input) — mirrors the containment check server.py's HTTP API already
-    does in `_resolve_in_project`. Returns None if the name would resolve
-    outside the project root, so callers can refuse to create/serve a room
-    for it instead of writing outside the project.
+    input) — mirrors the containment check the HTTP API does in
+    `resolve_in_project`. Returns None if the name would resolve outside the
+    project root, so callers can refuse to create/serve a room for it instead
+    of writing outside the project.
     """
     if not room_name:
         return None
-    target = BASE_DIR / room_name
+    target = root / room_name
     try:
-        target.resolve().relative_to(BASE_DIR.resolve())
+        target.resolve().relative_to(root.resolve())
     except ValueError:
         return None
     return target
@@ -157,21 +153,23 @@ def apply_text_edit(text, old: str, new: str, replace_all: bool = False) -> int:
     return len(hits)
 
 
-class NoteworthyRoom(YRoom):
+class SyncRoom(YRoom):
     """
     Custom room that syncs with disk.
     Each file gets its own room identified by relative file path.
     """
     
-    def __init__(self, room_name: str, *args, **kwargs):
+    def __init__(self, room_name: str, root: Path, state_dir: Path, *args, **kwargs):
         super().__init__(ready=True, *args, **kwargs)  # Start ready since we load sync
         self.room_name = room_name
+        self._root = Path(root)
+        self._state_dir = Path(state_dir)
         # Room names come straight off the websocket URL — refuse to build a
-        # room that would read/write outside BASE_DIR (path traversal via
-        # e.g. room_name="../../etc/passwd"). Raising here means the caller
+        # room that would read/write outside the project root (path traversal
+        # via e.g. room_name="../../etc/passwd"). Raising here means the caller
         # never inserts this room into the registry, so it can't be created
         # or served.
-        file_path = _resolve_room_path(room_name)
+        file_path = _resolve_room_path(self._root, room_name)
         if file_path is None:
             raise ValueError(f"Room name escapes project root: {room_name!r}")
         self._file_path = file_path
@@ -220,7 +218,7 @@ class NoteworthyRoom(YRoom):
         # identity, so on reconnect each side kept both copies and the file
         # doubled.  Once per restart, which is exactly how content/8/1.typ went
         # 7249 -> 14498 -> 21747 -> 28996 bytes.
-        state = _state_path(self.room_name)
+        state = _state_path(self._state_dir, self.room_name)
         restored = False
         if not self._initialized and state.exists():
             try:
@@ -283,7 +281,7 @@ class NoteworthyRoom(YRoom):
 
         try:
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self._file_path.with_name(f".{self._file_path.name}.nw-tmp")
+            tmp_path = self._file_path.with_name(f".{self._file_path.name}.sw-tmp")
             tmp_path.write_text(content, encoding='utf-8')
             os.replace(tmp_path, self._file_path)
             log.debug(f"[YjsRoom] Saved {self.room_name} ({len(content)} chars)")
@@ -301,9 +299,9 @@ class NoteworthyRoom(YRoom):
         same reason as the text.
         """
         try:
-            state = _state_path(self.room_name)
+            state = _state_path(self._state_dir, self.room_name)
             state.parent.mkdir(parents=True, exist_ok=True)
-            tmp_state = state.with_name(f".{state.name}.nw-tmp")
+            tmp_state = state.with_name(f".{state.name}.sw-tmp")
             tmp_state.write_bytes(self.ydoc.get_update())
             os.replace(tmp_state, state)
         except Exception as e:
@@ -391,34 +389,50 @@ class NoteworthyRoom(YRoom):
             log.error(f"[YjsRoom] Error stopping room {self.room_name}: {e}")
 
 
-class NoteworthyWebsocketServer(WebsocketServer):
-    """Custom WebsocketServer that delegates room creation to YjsProvider."""
+class SyncWebsocketServer(WebsocketServer):
+    """Custom WebsocketServer that delegates room creation to the RoomManager."""
     
-    def __init__(self, provider: 'YjsProvider', *args, **kwargs):
+    def __init__(self, provider: 'RoomManager', *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.provider = provider
     
-    async def get_room(self, name: str) -> NoteworthyRoom:
+    async def get_room(self, name: str) -> SyncRoom:
         """Override to use our custom room logic."""
         return await self.provider.get_room(name)
 
 
-class YjsProvider:
+class RoomManager:
     """
-    Manages Yjs/CRDT document synchronization.
+    Manages Yjs/CRDT document synchronization for one project.
     
     Each document (file) gets its own "room" for collaborative editing.
+    ROOT is the project directory; STATE_DIR is where the CRDT state blobs live.
     """
     
-    def __init__(self):
-        self.rooms: Dict[str, NoteworthyRoom] = {}
-        self.server: Optional[NoteworthyWebsocketServer] = None
+    def __init__(self, root: Path, state_dir: Path, packet_log: bool | None = None):
+        self.root = Path(root)
+        self.state_dir = Path(state_dir)
+        self.rooms: Dict[str, SyncRoom] = {}
+        self.server: Optional[SyncWebsocketServer] = None
         self._callbacks = []
         self._room_locks: Dict[str, asyncio.Lock] = {}
+        self.packet_logging = (_env_flag("SYNCWORTHY_PACKET_LOG", "NOTEWORTHY_PACKET_LOG")
+                               if packet_log is None else bool(packet_log))
+        self._asgi_app = None
+
+    def set_packet_logging(self, enabled: bool):
+        """Enable/disable low-level Yjs websocket packet logging."""
+        self.packet_logging = bool(enabled)
+
+    def state_path(self, room_name: str) -> Path:
+        return _state_path(self.state_dir, room_name)
+
+    def resolve(self, room_name: str) -> Path | None:
+        return _resolve_room_path(self.root, room_name)
     
-    async def get_room(self, file_path: str) -> NoteworthyRoom:
+    async def get_room(self, file_path: str) -> SyncRoom:
         """Get or create a room for a file (async for pycrdt-websocket compatibility)."""
-        log.debug(f"[YjsProvider] get_room called for: {file_path}")
+        log.debug(f"[RoomManager] get_room called for: {file_path}")
         # Normalize path (remove /yjs/ prefix if present)
         original_path = file_path
         if file_path.startswith("/yjs/"):
@@ -426,7 +440,7 @@ class YjsProvider:
         elif file_path.startswith("/"):
             file_path = file_path[1:]
             
-        log.debug(f"[YjsProvider] Normalized path: {original_path} -> {file_path}")
+        log.debug(f"[RoomManager] Normalized path: {original_path} -> {file_path}")
 
         # Serialize per-room setup. Two clients opening the same *cold* room at
         # once would otherwise race through create/initialize/start_room, and the
@@ -436,14 +450,14 @@ class YjsProvider:
         async with lock:
             return await self._get_room_locked(file_path)
 
-    async def _get_room_locked(self, file_path: str) -> NoteworthyRoom:
+    async def _get_room_locked(self, file_path: str) -> SyncRoom:
         """Create/initialize/start the room. Callers must hold the room lock."""
         if file_path not in self.rooms:
-            log.debug(f"[YjsProvider] Creating new NoteworthyRoom for {file_path}")
-            room = NoteworthyRoom(room_name=file_path)
+            log.debug(f"[RoomManager] Creating new SyncRoom for {file_path}")
+            room = SyncRoom(room_name=file_path, root=self.root, state_dir=self.state_dir)
             self.rooms[file_path] = room
         else:
-            log.debug(f"[YjsProvider] Found existing NoteworthyRoom for {file_path}")
+            log.debug(f"[RoomManager] Found existing SyncRoom for {file_path}")
             
         room = self.rooms[file_path]
         
@@ -451,7 +465,7 @@ class YjsProvider:
         if self.server:
             # We map the room in the server so it knows about it
             if file_path not in self.server.rooms:
-                log.debug(f"[YjsProvider] Registering room with WebsocketServer: {file_path}")
+                log.debug(f"[RoomManager] Registering room with WebsocketServer: {file_path}")
                 self.server.rooms[file_path] = room
         
         # Initialize content from disk if needed
@@ -477,15 +491,15 @@ class YjsProvider:
                 return
             if self.server is not None:
                 self.server.rooms.pop(file_path, None)
-            log.info(f"[YjsProvider] Closing room {file_path}")
+            log.info(f"[RoomManager] Closing room {file_path}")
             await room.close()
             # The file is going; its CRDT state would otherwise be restored
             # onto a path that no longer has one, and a file later recreated
             # there would come back with the old document's contents.
             try:
-                _state_path(file_path).unlink(missing_ok=True)
+                self.state_path(file_path).unlink(missing_ok=True)
             except OSError as e:
-                log.error(f"[YjsProvider] Could not drop CRDT state for {file_path}: {e}")
+                log.error(f"[RoomManager] Could not drop CRDT state for {file_path}: {e}")
 
     async def edit_room(self, path: str, old: str, new: str,
                         replace_all: bool = False) -> int:
@@ -507,9 +521,9 @@ class YjsProvider:
         occupies new_path, it's closed rather than silently overwritten, so
         its save timer/clients don't leak.
         """
-        new_file_path = _resolve_room_path(new_path)
+        new_file_path = self.resolve(new_path)
         if new_file_path is None:
-            log.error(f"[YjsProvider] Refusing to rebind room to unsafe path: {new_path!r}")
+            log.error(f"[RoomManager] Refusing to rebind room to unsafe path: {new_path!r}")
             await self.close_room(old_path)
             return
 
@@ -539,7 +553,7 @@ class YjsProvider:
                 self.rooms[new_path] = room
                 if self.server is not None:
                     self.server.rooms[new_path] = room
-                log.info(f"[YjsProvider] Rebound room {old_path} -> {new_path}")
+                log.info(f"[RoomManager] Rebound room {old_path} -> {new_path}")
 
     def _rooms_under(self, path: str) -> list:
         """Room keys equal to `path`, or nested under it (directory ops)."""
@@ -567,90 +581,73 @@ class YjsProvider:
             try:
                 await cb(file_path, content)
             except Exception as e:
-                log.error(f"[YjsProvider] Callback error: {e}")
+                log.error(f"[RoomManager] Callback error: {e}")
 
 
-# Global instance
-yjs_provider = YjsProvider()
+    def asgi_app(self):
+        """
+        The ASGI application for Yjs WebSocket handling, mounted at /yjs.
 
-# Cached ASGI app (singleton)
-_yjs_asgi_app = None
+        A cached singleton per manager, to prevent multiple WebsocketServer
+        instances.
+        """
+        if self._asgi_app is not None:
+            return self._asgi_app
 
+        server = SyncWebsocketServer(
+            provider=self,
+            rooms_ready=True,
+            auto_clean_rooms=False
+        )
+        self.server = server
 
-def get_yjs_asgi_app():
-    """
-    Create the ASGI application for Yjs WebSocket handling.
-    
-    This is mounted at /yjs in the main FastAPI app.
-    Returns a cached singleton to prevent multiple WebsocketServer instances.
-    """
-    global _yjs_asgi_app
-    
-    # Return cached app if already created
-    if _yjs_asgi_app is not None:
-        log.debug("[YjsProvider] Returning cached Yjs ASGI app")
-        return _yjs_asgi_app
-    
-    # Create the custom websocket server
-    server = NoteworthyWebsocketServer(
-        provider=yjs_provider,
-        rooms_ready=True, 
-        auto_clean_rooms=False
-    )
-    yjs_provider.server = server
-    
-    # NOTE: We no longer monkey-patch server.get_room because we subclassed it.
-    
-    log.info("[YjsProvider] Initializing Yjs ASGI app structure...")
-    yjs_asgi = ASGIServer(server)
+        log.info("[RoomManager] Initializing Yjs ASGI app structure...")
+        yjs_asgi = ASGIServer(server)
+        manager = self
 
-    async def app_wrapper(scope, receive, send):
-        if scope.get("type", "") == "websocket":
-            log.debug(f"[YjsWrapper] Wrapper called with path: {scope.get('path')}")
+        async def app_wrapper(scope, receive, send):
+            # Debug wrappers for packet logging
+            async def logging_receive():
+                msg = await receive()
+                if manager.packet_logging and msg["type"] == "websocket.receive":
+                    data = msg.get("bytes") or msg.get("text")
+                    if data:
+                        size = len(data)
+                        prefix = ""
+                        if isinstance(data, bytes) and size > 0:
+                            # Log message type (0=Sync, 1=Awareness)
+                            prefix = f" [Type={data[0]}]"
+                        log.info(f"[Yjs] <<< RECV {scope.get('path')} ({size}b){prefix}")
+                        log.info(data)
+                return msg
 
-        # Debug wrappers for packet logging
-        async def logging_receive():
-            msg = await receive()
-            if _packet_logging_enabled and msg["type"] == "websocket.receive":
-                data = msg.get("bytes") or msg.get("text")
-                if data:
-                    size = len(data)
-                    prefix = ""
-                    if isinstance(data, bytes) and size > 0:
-                        # Log message type (0=Sync, 1=Awareness)
-                        msg_type = data[0]
-                        prefix = f" [Type={msg_type}]"
-                    log.info(f"[Yjs] <<< RECV {scope.get('path')} ({size}b){prefix}")
-                    log.info(data)
-            return msg
+            async def logging_send(msg):
+                if manager.packet_logging and msg["type"] == "websocket.send":
+                    data = msg.get("bytes") or msg.get("text")
+                    if data:
+                        size = len(data)
+                        prefix = ""
+                        if isinstance(data, bytes) and size > 0:
+                            prefix = f" [Type={data[0]}]"
+                        log.info(f"[Yjs] >>> SEND {scope.get('path')} ({size}b){prefix}")
+                        log.info(data)
+                await send(msg)
 
-        async def logging_send(msg):
-            if _packet_logging_enabled and msg["type"] == "websocket.send":
-                data = msg.get("bytes") or msg.get("text")
-                if data:
-                    size = len(data)
-                    prefix = ""
-                    if isinstance(data, bytes) and size > 0:
-                        msg_type = data[0]
-                        prefix = f" [Type={msg_type}]"
-                    log.info(f"[Yjs] >>> SEND {scope.get('path')} ({size}b){prefix}")
-                    log.info(data)
-            await send(msg)
-        # Lifespan events handled in main server.py
-        if scope["type"] == "lifespan":
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.startup":
-                    await send({"type": "lifespan.startup.complete"})
-                elif message["type"] == "lifespan.shutdown":
-                    await send({"type": "lifespan.shutdown.complete"})
-                    return
-            
-        try:
-            return await yjs_asgi(scope, logging_receive, logging_send)
-        except Exception as e:
-            log.error(f"[YjsWrapper] Error in yjs_asgi: {e}")
-            raise e
+            # Lifespan events handled by the main app
+            if scope["type"] == "lifespan":
+                while True:
+                    message = await receive()
+                    if message["type"] == "lifespan.startup":
+                        await send({"type": "lifespan.startup.complete"})
+                    elif message["type"] == "lifespan.shutdown":
+                        await send({"type": "lifespan.shutdown.complete"})
+                        return
 
-    _yjs_asgi_app = app_wrapper
-    return _yjs_asgi_app
+            try:
+                return await yjs_asgi(scope, logging_receive, logging_send)
+            except Exception as e:
+                log.error(f"[YjsWrapper] Error in yjs_asgi: {e}")
+                raise e
+
+        self._asgi_app = app_wrapper
+        return self._asgi_app

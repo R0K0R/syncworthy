@@ -2275,3 +2275,8 @@ select option {
     border: none;
     border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
+/* No previewer plugin: the editor takes the whole width. */
+#page-editor.no-preview .preview-panel,
+#page-editor.no-preview #editor-resizer {
+    display: none;
+}

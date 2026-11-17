@@ -58,13 +58,16 @@
         getFileIcon: function (name) {
             const ext = name.split('.').pop().toLowerCase();
             const svgIcons = {
-                'typ': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#4ECDC4" opacity="0.2" stroke="#4ECDC4" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="7" fill="#4ECDC4" font-family="monospace" font-weight="bold">t</text></svg>`,
                 'pdf': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#FF6B6B" opacity="0.2" stroke="#FF6B6B" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="6" fill="#FF6B6B" font-family="monospace" font-weight="bold">PDF</text></svg>`,
                 'png': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#FFE66D" opacity="0.2" stroke="#FFE66D" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="5.5" fill="#FFE66D" font-family="monospace" font-weight="bold">IMG</text></svg>`,
                 'jpg': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#FFE66D" opacity="0.2" stroke="#FFE66D" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="5.5" fill="#FFE66D" font-family="monospace" font-weight="bold">IMG</text></svg>`,
                 'jpeg': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#FFE66D" opacity="0.2" stroke="#FFE66D" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="5.5" fill="#FFE66D" font-family="monospace" font-weight="bold">IMG</text></svg>`,
                 'svg': `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:middle"><rect x="2" y="1" width="12" height="14" rx="2" fill="#95E1D3" opacity="0.2" stroke="#95E1D3" stroke-width="1.2"/><text x="8" y="11" text-anchor="middle" font-size="5.5" fill="#95E1D3" font-family="monospace" font-weight="bold">SVG</text></svg>`,
             };
+            const branded = (this.brand && this.brand().file_icons) || {};
+            if (branded[ext]) {
+                return { type: 'svg', value: branded[ext] };
+            }
             if (svgIcons[ext]) {
                 return { type: 'svg', value: svgIcons[ext] };
             }

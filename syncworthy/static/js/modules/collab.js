@@ -3,7 +3,7 @@
 //
 // Packet routing:
 //   /yjs  (y-monaco + MonacoBinding)  -> Content sync only.
-//   /ws/doc (docSocket)               -> Chat, Preview, Presence, Cursors.
+//   /ws/doc (docSocket)               -> Chat, Presence, Cursors, plugin messages.
 //
 // No Yjs Awareness used. Cursors and presence are handled entirely
 // via docSocket JSON messages.
@@ -27,7 +27,7 @@
                     clientId = (window.crypto && window.crypto.randomUUID)
                         ? window.crypto.randomUUID()
                         : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-                    sessionStorage.setItem('noteworthy_client_id', clientId);
+                    sessionStorage.setItem('syncworthy_client_id', clientId);
                     this.state.docClientId = clientId;
                 }
 
@@ -39,7 +39,7 @@
                 // Wrap send for debugging
                 const originalSend = this.state.docSocket.send;
                 this.state.docSocket.send = function (data) {
-                    if (window.__NOTEWORTHY_DEBUG_PACKETS) {
+                    if ((window.__SYNCWORTHY_DEBUG_PACKETS || window.__NOTEWORTHY_DEBUG_PACKETS)) {
                         try {
                             console.log('[Doc OUT]', JSON.parse(data));
                         } catch (e) {
@@ -63,7 +63,7 @@
                         console.warn('[Doc] Ignoring malformed message:', e.data);
                         return;
                     }
-                    if (window.__NOTEWORTHY_DEBUG_PACKETS) {
+                    if ((window.__SYNCWORTHY_DEBUG_PACKETS || window.__NOTEWORTHY_DEBUG_PACKETS)) {
                         console.log('[Doc IN]', msg);
                     }
                     this.handleDocMessage(msg);
@@ -108,18 +108,14 @@
                     this.addChatMessage(msg);
                     break;
 
-                // ---- Preview / Diagnostics ----
-                case 'preview':
-                    this.updatePreview(msg.updates);
-                    break;
-
+                // ---- Diagnostics ----
                 case 'diagnostics':
                     this.applyDiagnostics(msg.diagnostics);
                     break;
 
-                // ---- Build progress (real numbers from BuildManager) ----
-                case 'build_progress':
-                    if (this.updateBuildProgress) this.updateBuildProgress(msg);
+                // ---- Generic action progress ----
+                case 'action_progress':
+                    this.updateActionProgress(msg);
                     break;
 
                 // ---- Remote cursors (custom, low-latency, via docSocket) ----
@@ -139,7 +135,10 @@
                     break;
 
                 default:
-                    console.warn('[Doc] Unknown message type:', msg.type);
+                    // Plugin messages (preview, build progress, ...)
+                    if (!this._dispatchPluginMessage(msg)) {
+                        console.warn('[Doc] Unknown message type:', msg.type);
+                    }
             }
         },
 

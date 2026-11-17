@@ -38,14 +38,18 @@
 
         renderTreeItems: function (items, depth) {
             const div = document.createElement('div');
-            const bottomFolders = ['assets', 'templates', 'config'];
+            const brand = this.brand();
+            const bottomFolders = brand.tree_bottom || [];
+            const topFolders = brand.tree_top || [];
             const sortedItems = [...items].sort((a, b) => {
                 const aIsBottom = bottomFolders.includes(a.name);
                 const bIsBottom = bottomFolders.includes(b.name);
                 if (aIsBottom && !bIsBottom) return 1;
                 if (!aIsBottom && bIsBottom) return -1;
-                if (a.name === 'content' && b.name !== 'content') return -1;
-                if (a.name !== 'content' && b.name === 'content') return 1;
+                const aIsTop = topFolders.includes(a.name);
+                const bIsTop = topFolders.includes(b.name);
+                if (aIsTop && !bIsTop) return -1;
+                if (!aIsTop && bIsTop) return 1;
                 return a.name.localeCompare(b.name);
             });
 
@@ -266,16 +270,16 @@
             const menu = document.getElementById('new-dropdown-menu');
             if (menu) menu.classList.remove('visible');
 
-            let parentDir = 'content';
+            let parentDir = this.brand().new_file_dir || '';
             if (this.state.activeFile) {
                 const parts = this.state.activeFile.split('/');
                 parts.pop();
                 if (parts.length > 0) parentDir = parts.join('/');
             }
 
-            const filename = prompt('Enter filename:', 'new-file.typ');
+            const filename = prompt('Enter filename:', this.brand().new_file_name || 'new-file.txt');
             if (!filename) return;
-            const path = `${parentDir}/${filename}`;
+            const path = parentDir ? `${parentDir}/${filename}` : filename;
 
             try {
                 const res = await fetch('/api/file', {
@@ -300,7 +304,7 @@
             const menu = document.getElementById('new-dropdown-menu');
             if (menu) menu.classList.remove('visible');
 
-            let parentDir = 'content';
+            let parentDir = this.brand().new_file_dir || '';
             if (this.state.activeFile) {
                 const parts = this.state.activeFile.split('/');
                 parts.pop();
@@ -309,7 +313,7 @@
 
             const foldername = prompt('Enter folder name:', 'new-folder');
             if (!foldername) return;
-            const path = `${parentDir}/${foldername}/.gitkeep`;
+            const path = parentDir ? `${parentDir}/${foldername}/.gitkeep` : `${foldername}/.gitkeep`;
 
             try {
                 const res = await fetch('/api/file', {

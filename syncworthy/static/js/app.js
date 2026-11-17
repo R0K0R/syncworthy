@@ -1,14 +1,15 @@
 /**
- * Noteworthy GUI - Main Application (Core)
+ * Syncworthy - Main Application (Core)
  *
  * Module files loaded first (see index.html), in order:
  *   js/modules/utils.js       - Shared helpers
+ *   js/modules/plugin_api.js  - window.Syncworthy: what plugin bundles register with
  *   js/modules/file_tree.js   - File tree & file CRUD
- *   js/modules/collab.js      - WebSocket, Yjs Awareness cursors, user presence
- *   js/modules/config.js      - Config tab panels
- *   js/modules/build.js       - Build page/modal
+ *   js/modules/collab.js      - WebSocket, cursors, user presence, diagnostics markers
+ *   js/modules/settings.js    - Settings tabs (plugin pages + Session/Info)
+ *   js/modules/actions.js     - Generic page for plugin actions
  *   js/modules/chat.js        - Chat panel
- *   js/modules/preview.js     - SVG preview / source-map clicks
+ * Plugin bundles (/plugins/<name>/...) are loaded by app.boot() before app.init().
  */
 
 const app = {
@@ -35,23 +36,42 @@ const app = {
         remoteCursorDecorations: [],
         externalCursorDecorations: {},
         projectPath: null,
+
+        // From /api/app: branding, plugins, preview/diagnostics capabilities, pages
+        appInfo: null,
     },
 
-    ASCII_LOGO: "         ,--. \n       ,--.'| \n   ,--,:  : | \n,`--.'`|  ' : \n|   :  :  | | \n:   |   \\ | : \n|   : '  '; | \n'   ' ;.    ; \n|   | | \\   | \n'   : |  ; .' \n|   | `--'   \n'   : |       \n;   |.'       \n'---'         ",
-
-    SIMPLE_ICONS: {
-        'typ': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M12.654 17.846c0 1.114.16 1.861.479 2.242.32.381.901.572 1.743.572.872 0 1.99-.44 3.356-1.319l.871 1.45C16.547 22.931 14.44 24 12.785 24c-1.656 0-2.964-.395-3.922-1.187-.959-.82-1.438-2.256-1.438-4.307V6.989H5.246l-.349-1.626 2.528-.791V2.418L12.654 0v4.835l5.142-.395-.48 2.857-4.662-.176v10.725Z"/></svg>',
-        'json': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M5.759 3.975h1.783V5.76H5.759V9.33C5.759 11.116 4.418 12 2.875 12H1.092v-1.784h1.783c.593 0 1.09-.297 1.09-.89V5.759c0-1.04.644-1.584 1.387-1.783-.743-.2-1.387-.744-1.387-1.783V.099H4.965l-.001 3.876zm12.482 0H16.46V5.76h1.783V9.33C18.241 11.116 19.582 12 21.125 12h1.783v-1.784h-1.783c-.594 0-1.09-.297-1.09-.89V5.759c0-1.04-.645-1.584-1.388-1.783.743-.2 1.388-.744 1.388-1.783V.099h-1.783l-.001 3.876z"/></svg>',
-        'py': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26.02.2-.01.13V8.5l-.05.63-.13.55-.21.46-.26.38-.3.31-.33.25-.35.19-.35.14-.33.1-.3.07-.26.04-.21.02H8.77l-.69.05-.59.14-.5.22-.41.27-.33.32-.27.35-.2.36-.15.37-.1.35-.07.32-.04.27-.02.21v3.06H3.17l-.21-.03-.28-.07-.32-.12-.35-.18-.36-.26-.36-.36-.35-.46-.32-.59-.28-.73-.21-.88-.14-1.05-.05-1.23.06-1.22.16-1.04.24-.87.32-.71.36-.57.4-.44.42-.33.42-.24.4-.16.36-.1.32-.05.24-.01h.16l.06.01h8.16v-.83H6.18l-.01-2.75-.02-.37.05-.34.11-.31.17-.28.25-.26.31-.23.38-.2.44-.18.51-.15.58-.12.64-.1.71-.06.77-.04.84-.02 1.27.05z"/></svg>',
-        'js': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M0 0h24v24H0V0zm22.034 18.276c-.175-1.095-.888-2.015-3.003-2.873-.736-.345-1.554-.585-1.797-1.14-.091-.33-.105-.51-.046-.705.15-.646.915-.84 1.515-.66.39.12.75.42.976.9 1.034-.676 1.755-1.125 1.755-1.125-.27-.42-.404-.601-.586-.78-.63-.705-1.469-1.065-2.834-1.034l-.705.089c-.676.165-1.32.525-1.71 1.005-1.14 1.291-.811 3.541.569 4.471 1.365 1.02 3.361 1.244 3.616 2.205.24 1.17-.87 1.545-1.966 1.41-.811-.18-1.26-.586-1.755-1.336l-1.83 1.051c.21.48.45.689.81 1.109 1.74 1.756 6.09 1.666 6.871-1.004.029-.09.24-.705.074-1.65l.046.067zm-8.983-7.245h-2.248c0 1.938-.009 3.864-.009 5.805 0 1.232.063 2.363-.138 2.711-.33.689-1.18.601-1.566.48-.396-.196-.597-.466-.83-.855-.063-.105-.11-.196-.127-.196l-1.825 1.125c.305.63.75 1.172 1.324 1.517.855.51 2.004.675 3.207.405.783-.226 1.458-.691 1.811-1.411.51-.93.402-2.07.397-3.346.012-2.054 0-4.109 0-6.179l.004-.056z"/></svg>',
-        'css': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M0 0v20.16A3.84 3.84 0 0 0 3.84 24h16.32A3.84 3.84 0 0 0 24 20.16V3.84A3.84 3.84 0 0 0 20.16 0Z"/></svg>',
-        'html': '<svg class="tree-file" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="width:14px;height:14px;margin-left:20px;fill:currentColor;"><path d="M1.5 0h21l-1.91 21.563L11.977 24l-8.564-2.438L1.5 0zm7.031 9.75l-.232-2.718 10.059.003.23-2.622L5.412 4.41l.698 8.01h9.126l-.326 3.426-2.91.804-2.955-.81-.188-2.11H6.248l.33 4.171L12 19.351l5.379-1.443.744-8.157H8.531z"/></svg>',
+    // Branding with defaults filled in (the server merges core, plugin and config branding).
+    brand: function () {
+        return (this.state.appInfo && this.state.appInfo.branding) || { name: 'Syncworthy', info: {}, file_icons: {} };
     },
 
-    getFileIcon: function (filename) {
-        const ext = filename.split('.').pop()?.toLowerCase();
-        if (this.SIMPLE_ICONS[ext]) return { type: 'svg', value: this.SIMPLE_ICONS[ext] };
-        return { type: 'lucide', value: 'file' };
+    // Load /api/app, then each plugin's bundle (scripts in order, styles), then init.
+    boot: async function () {
+        try {
+            this.state.appInfo = await (await fetch('/api/app')).json();
+        } catch (e) {
+            console.error('Could not load /api/app', e);
+            this.state.appInfo = { name: 'Syncworthy', branding: { name: 'Syncworthy', info: {}, file_icons: {} }, plugins: [], settings_pages: [], actions: [] };
+        }
+        document.title = this.brand().title || this.brand().name;
+        for (const p of this.state.appInfo.plugins || []) {
+            if (!p.base) continue;
+            for (const href of p.styles || []) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet'; link.href = p.base + href;
+                document.head.appendChild(link);
+            }
+            for (const src of p.scripts || []) {
+                await new Promise(resolve => {
+                    const el = document.createElement('script');
+                    el.src = p.base + src; el.onload = resolve;
+                    el.onerror = () => { console.error('Failed to load plugin script', el.src); resolve(); };
+                    document.body.appendChild(el);
+                });
+            }
+        }
+        await this.init();
     },
 
     // ============================================================
@@ -61,31 +81,29 @@ const app = {
     init: async function () {
         // Wire in module mixins
         Object.assign(this, window._utilsMixin || {});
+        Object.assign(this, window._pluginApiMixin || {});
         Object.assign(this, window._fileTreeMixin || {});
         Object.assign(this, window._collabMixin || {});
-        Object.assign(this, window._configMixin || {});
-        Object.assign(this, window._buildMixin || {});
+        Object.assign(this, window._settingsMixin || {});
+        Object.assign(this, window._actionsMixin || {});
         Object.assign(this, window._chatMixin || {});
-        Object.assign(this, window._previewMixin || {});
+        // Plugin bundles, in load order: their methods land on `app` too.
+        for (const p of window.Syncworthy.registry.plugins) Object.assign(this, p.mixin);
 
-        // Settings sidebar tabs need explicit click handlers in the
-        // collaborative GUI, just like the solo GUI already has.
-        document.querySelectorAll('.config-tab').forEach(tab => {
-            tab.onclick = () => this.showConfigTab(tab.dataset.tab);
-        });
+        // No previewer plugin: no preview panel.
+        const hasPreview = !!(this.state.appInfo && this.state.appInfo.preview);
+        document.getElementById('page-editor').classList.toggle('no-preview', !hasPreview);
+        const phText = document.getElementById('preview-placeholder-text');
+        if (phText && hasPreview) phText.textContent = this.state.appInfo.preview.placeholder;
 
-        // Debounced config saves
-        this.debouncedUpdateMetadata = this.debounce(this.updateMetadata.bind(this), 500);
-        this.debouncedUpdateConstants = this.debounce(this.updateConstants.bind(this), 500);
-        this.debouncedSaveHierarchy = this.debounce(this.saveHierarchy.bind(this), 800);
-        this.debouncedSaveSnippets = this.debounce(this.saveSnippets.bind(this), 500);
-        this.debouncedSavePreface = this.debounce(this.savePreface.bind(this), 800);
-        this.debouncedSaveIgnored = this.debounce(this.saveIgnored.bind(this), 500);
+        this.buildSettingsTabs();
+        this.setupActions();
+        this._runPluginHooks('init');
 
         await this._initMonaco();
 
         // Apply saved theme
-        if (this.state.editorTheme === 'noteworthy-dark') {
+        if (this.state.editorTheme === this.brand().base_theme) {
             document.body.removeAttribute('data-theme');
         } else {
             document.body.dataset.theme = this.state.editorTheme;
@@ -95,15 +113,15 @@ const app = {
 
         // ── Stable identity ───────────────────────────────────────
         // Must be set BEFORE connectDocSocket() so the URL includes the token.
-        let token = localStorage.getItem('nw_token');
+        let token = localStorage.getItem('sw_token') || localStorage.getItem('nw_token');
         if (!token) {
             token = ([1e7] + -1e3 + -4e3 + -8e3 + -1e11).replace(/[018]/g, c =>
                 (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
-            localStorage.setItem('nw_token', token);
+            localStorage.setItem('sw_token', token);
         }
         this.state.userToken = token;
 
-        let color = localStorage.getItem('nw_color');
+        let color = localStorage.getItem('sw_color') || localStorage.getItem('nw_color');
         const validStoredColor = typeof color === 'string'
             && color.trim() !== ''
             && color !== 'undefined'
@@ -111,7 +129,7 @@ const app = {
             && (!window.CSS || !window.CSS.supports || window.CSS.supports('color', color));
         if (!validStoredColor) {
             color = this.getUserColor(token);
-            localStorage.setItem('nw_color', color);
+            localStorage.setItem('sw_color', color);
         }
         this.state.userColor = color;
         // ─────────────────────────────────────────────────────────
@@ -126,7 +144,7 @@ const app = {
         await this.refreshTree();
         await this.loadStatus();
 
-        this.showConfigTab('metadata');
+        this.showConfigTab(this._firstSettingsTab || 'session');
         this.initResizer();
 
         document.addEventListener('keydown', (e) => {
@@ -211,11 +229,11 @@ const app = {
                 });
 
                 // Diagnostics: re-check after edits settle, not on every
-                // keystroke — /api/check shells out to `typst compile`, so
+                // keystroke — a plugin's checker may shell out to a compiler, so
                 // firing it per-keystroke would spam the process.
                 let _diagnosticsDebounceTimer = null;
                 this.state.editor.onDidChangeModelContent(() => {
-                    if (!this.state.activeFile || !this.state.activeFile.endsWith('.typ')) return;
+                    if (!this.hasDiagnostics(this.state.activeFile)) return;
                     if (_diagnosticsDebounceTimer) clearTimeout(_diagnosticsDebounceTimer);
                     _diagnosticsDebounceTimer = setTimeout(() => {
                         _diagnosticsDebounceTimer = null;
@@ -277,10 +295,13 @@ const app = {
         });
     },
 
+    // Core themes, plus whatever the branding brings.  Without branded themes the
+    // built-in Syncworthy pair is offered.  Branded ones come first.
     _defineEditorThemes: function () {
-        this.EDITOR_THEMES = {
-            'noteworthy-dark': {
-                label: 'Noteworthy Dark',
+        const brandThemes = this.brand().themes;
+        const fallback = {
+            'syncworthy-dark': {
+                label: 'Syncworthy Dark',
                 base: 'vs-dark',
                 colors: {
                     'editor.background': '#0d0d0f',
@@ -299,8 +320,8 @@ const app = {
                     'scrollbarSlider.activeBackground': '#4ECDC460',
                 }
             },
-            'noteworthy-light': {
-                label: 'Noteworthy Light',
+            'syncworthy-light': {
+                label: 'Syncworthy Light',
                 base: 'vs',
                 colors: {
                     'editor.background': '#f5f5f7',
@@ -312,10 +333,12 @@ const app = {
                     'editorLineNumber.activeForeground': '#0066cc',
                 }
             },
+        };
+        this.EDITOR_THEMES = Object.assign({}, brandThemes || fallback, {
             'vs-dark': { label: 'VS Dark', base: 'vs-dark', colors: {} },
             'vs': { label: 'VS Light', base: 'vs', colors: {} },
             'hc-black': { label: 'High Contrast', base: 'hc-black', colors: {} },
-        };
+        });
 
         Object.entries(this.EDITOR_THEMES).forEach(([id, theme]) => {
             if (id !== 'vs-dark' && id !== 'vs' && id !== 'hc-black') {
@@ -340,13 +363,14 @@ const app = {
             item.classList.toggle('active', item.dataset.page === pageId);
         });
         if (window.lucide) lucide.createIcons();
-        if (pageId === 'build') this.renderBuildHierarchy();
+        const hook = this._pageHooks && this._pageHooks[pageId];
+        if (hook && hook.onShow) hook.onShow.call(this);
     },
 
     setEditorTheme: function (theme) {
         this.state.editorTheme = theme;
         localStorage.setItem('editorTheme', theme);
-        if (theme === 'noteworthy-dark') {
+        if (theme === this.brand().base_theme) {
             document.body.removeAttribute('data-theme');
         } else {
             document.body.dataset.theme = theme;
@@ -391,7 +415,7 @@ const app = {
             }
             pdfViewer.style.display = 'block';
             pdfViewer.innerHTML = '<iframe src="/api/file?path=' + encodeURIComponent(path) + '&raw=1" style="width:100%;height:100%;border:none;"></iframe>';
-            previewContainer.innerHTML = '<div class="preview-placeholder"><i data-lucide="file-text"></i><span>Select a .typ file to view preview</span></div>';
+            previewContainer.innerHTML = this.previewPlaceholderHtml('file-text');
             if (window.lucide) lucide.createIcons();
             return;
 
@@ -408,7 +432,7 @@ const app = {
             imageViewer.innerHTML = '<img src="/api/file?path=' + encodeURIComponent(path) + '&raw=1" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);">';
             const pdfViewer = document.getElementById('pdf-viewer');
             if (pdfViewer) pdfViewer.style.display = 'none';
-            previewContainer.innerHTML = '<div class="preview-placeholder"><i data-lucide="image"></i><span>Select a .typ file to view preview</span></div>';
+            previewContainer.innerHTML = this.previewPlaceholderHtml('image');
             if (window.lucide) lucide.createIcons();
             return;
 
@@ -420,10 +444,10 @@ const app = {
             if (pdfViewer) pdfViewer.style.display = 'none';
             if (imageViewer) imageViewer.style.display = 'none';
 
-            if (path.endsWith('.typ')) {
+            if (this.hasPreview(path)) {
                 previewContainer.innerHTML = '<div class="preview-loading"><div class="skeleton-page"></div><div class="skeleton-page"></div></div>';
             } else {
-                previewContainer.innerHTML = '<div class="preview-placeholder"><i data-lucide="file-code"></i><span>Select a .typ file to view preview</span></div>';
+                previewContainer.innerHTML = this.previewPlaceholderHtml('file-code');
                 if (window.lucide) lucide.createIcons();
             }
         }
@@ -469,7 +493,7 @@ const app = {
 
             // Hook the underlying WebSocket for raw packet debugging.
             // y-websocket recreates provider.ws on each (re)connect.
-            if (event.status === 'connected' && window.__NOTEWORTHY_DEBUG_PACKETS) {
+            if (event.status === 'connected' && (window.__SYNCWORTHY_DEBUG_PACKETS || window.__NOTEWORTHY_DEBUG_PACKETS)) {
                 const ws = this.state.yjsProvider.ws;
                 if (ws && !ws.__debugPatched) {
                     ws.__debugPatched = true;
@@ -551,6 +575,26 @@ const app = {
         }
 
         this.joinFile(path);
+        this._runPluginHooks('fileOpen', path);
+    },
+
+    // Does a previewer plugin render this file?
+    hasPreview: function (path) {
+        const pv = this.state.appInfo && this.state.appInfo.preview;
+        return !!(pv && path && pv.extensions.some(e => path.toLowerCase().endsWith(e)));
+    },
+
+    previewPlaceholderHtml: function (icon) {
+        const pv = this.state.appInfo && this.state.appInfo.preview;
+        const text = pv ? pv.placeholder_selected : 'No preview';
+        const span = document.createElement('span');
+        span.textContent = text;
+        return '<div class="preview-placeholder"><i data-lucide="' + icon + '"></i>' + span.outerHTML + '</div>';
+    },
+
+    hasDiagnostics: function (path) {
+        const dg = this.state.appInfo && this.state.appInfo.diagnostics;
+        return !!(dg && path && dg.extensions.some(e => path.toLowerCase().endsWith(e)));
     },
 
     joinFile: function (path) {
@@ -578,7 +622,7 @@ const app = {
     },
 
     checkDiagnostics: async function () {
-        if (!this.state.editor || !this.state.activeFile || !this.state.activeFile.endsWith('.typ')) return;
+        if (!this.state.editor || !this.hasDiagnostics(this.state.activeFile)) return;
         try {
             const res = await fetch('/api/check', {
                 method: 'POST',
@@ -603,11 +647,11 @@ const app = {
         overlay.id = 'welcome-overlay';
         const logo = document.createElement('div');
         logo.className = 'ascii-logo';
-        logo.textContent = this.ASCII_LOGO;
+        logo.textContent = this.brand().welcome_logo || '';
         const text = document.createElement('div');
         text.className = 'welcome-text';
-        text.textContent = 'NOTEWORTHY';
-        overlay.appendChild(logo);
+        text.textContent = this.brand().welcome_text;
+        if (logo.textContent) overlay.appendChild(logo);
         overlay.appendChild(text);
         const container = document.getElementById('monaco-container');
         if (container && container.parentElement) container.parentElement.appendChild(overlay);
@@ -671,5 +715,5 @@ const app = {
     },
 };
 
-window.onload = () => app.init();
+window.onload = () => app.boot();
 window.app = app;

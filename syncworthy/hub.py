@@ -1,26 +1,24 @@
 """
-DocumentHub - Real-time Hub for NON-YJS functionality.
+Hub - Real-time hub for NON-YJS functionality.
 
 Strict packet separation:
-  /yjs  -> Document content sync + cursors  (handled entirely by yjs_provider + y-monaco)
-  /ws/doc -> Chat, Preview, File Presence   (handled here)
+  /yjs    -> Document content sync   (handled entirely by rooms.py + y-monaco)
+  /ws/doc -> Chat, presence, cursors, plugin messages (handled here)
 
-This hub does NOT touch document content, cursors, or Yjs.
+This hub does NOT touch document content or Yjs.  A plugin's previewer is
+told when someone opens or leaves a file, and pushes its own messages through
+``broadcast`` / ``broadcast_to_file``.
 """
 import asyncio
 import logging
 import json
 import uuid
-import subprocess
-import tempfile
-import os
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 from fastapi import WebSocket
 from pathlib import Path
 
-from ..config import BASE_DIR, RENDERER_FILE
-log = logging.getLogger("noteworthy.gui")
+log = logging.getLogger("syncworthy")
 
 
 # User colors for avatars
@@ -40,9 +38,9 @@ class User:
     token: Optional[str] = None   # stable client token (from localStorage)
 
 
-class DocumentHub:
+class Hub:
     """
-    Hub for Chat / Preview / File Presence, and the relay for cursor packets.
+    Hub for Chat / File Presence, and the relay for cursor packets.
     Does NOT manage document content (that is the Yjs layer's concern).
     """
 
@@ -50,7 +48,20 @@ class DocumentHub:
         self.users: Dict[str, User] = {}
         self.color_index = 0
         self._lock = asyncio.Lock()
-        self.preview_manager = None
+        # Plugin previewers (see plugins.Previewer); the first that handles a
+        # path is the one told about it.
+        self.previewers: list = []
+
+    def _previewer_for(self, path: str | None):
+        if not path:
+            return None
+        for p in self.previewers:
+            try:
+                if p.handles(path):
+                    return p
+            except Exception as e:
+                log.error(f"[Hub] previewer.handles failed: {e}")
+        return None
 
     def _get_color(self) -> str:
         color = USER_COLORS[self.color_index % len(USER_COLORS)]
@@ -73,7 +84,7 @@ class DocumentHub:
             user.name = name
             if token:
                 user.token = token
-            await self._broadcast({
+            await self.broadcast({
                 "type": "user_updated",
                 "user": {
                     "id": user_id,
@@ -92,7 +103,7 @@ class DocumentHub:
                 token=token,
             )
             self.users[user_id] = user
-            await self._broadcast({
+            await self.broadcast({
                 "type": "user_joined",
                 "user": {
                     "id": user_id,
@@ -113,13 +124,14 @@ class DocumentHub:
         if websocket and user.websocket != websocket:
             return
         try:
-            if user.current_file and user.current_file.endswith('.typ') and self.preview_manager:
-                self.preview_manager.stop_watch(user.current_file)
+            prev = self._previewer_for(user.current_file)
+            if prev:
+                prev.stop(user.current_file)
         except Exception as e:
             log.error(f"[Hub] Error stopping watch during disconnect: {e}")
 
         del self.users[user_id]
-        await self._broadcast({"type": "user_left", "userId": user_id})
+        await self.broadcast({"type": "user_left", "userId": user_id})
 
     async def join_file(self, user_id: str, path: str):
         """User joins a file (for preview triggering)."""
@@ -130,67 +142,38 @@ class DocumentHub:
         user = self.users[user_id]
 
         try:
-            if user.current_file and user.current_file.endswith('.typ') and self.preview_manager:
-                self.preview_manager.stop_watch(user.current_file)
+            prev = self._previewer_for(user.current_file)
+            if prev:
+                prev.stop(user.current_file)
         except Exception as e:
             log.error(f"[Hub] Error stopping watch: {e}")
 
         user.current_file = path
 
-        if path.endswith('.typ') and self.preview_manager:
+        prev = self._previewer_for(path)
+        if prev:
             try:
-                self.preview_manager.start_watch(path)
-                # Send current cached preview state to joining user
-                for _ in range(20):
-                    await asyncio.sleep(0.15)
-                    status = self.preview_manager.get_status(path)
-                    if status['pages']:
-                        updates = []
-                        for page in status['pages']:
-                            svg_bytes = self.preview_manager.get_image(path, page)
-                            if svg_bytes:
-                                updates.append({'page': page, 'svg': svg_bytes.decode('utf-8')})
-                        if updates:
-                            await user.websocket.send_text(json.dumps({
-                                "type": "preview", "updates": updates
-                            }))
-                            break
+                prev.start(path)
+                # Send the previewer's cached state to the joining user.
+                for message in await prev.initial_messages(path):
+                    await user.websocket.send_text(json.dumps(message))
             except Exception as e:
                 log.error(f"[Hub] Error starting watch: {e}")
 
         # Broadcast the file change to ALL connected clients so their avatar
         # lists update immediately (not just users already on this file).
-        await self._broadcast({
+        await self.broadcast({
             "type": "user_updated",
             "user": {"id": user.id, "name": user.name, "color": user.color,
                      "file": path, "token": user.token},
         }, exclude=user_id)
-
-    async def on_preview_update(self, updates: list, source_path: str):
-        """Broadcast preview updates to users on this file."""
-        await self._broadcast_to_file(source_path, {
-            "type": "preview", "updates": updates
-        })
-
-    async def on_preview_log(self, level: str, message: str, source_path: str = None):
-        """Broadcast preview log messages to clients."""
-        payload = {
-            "type": "preview_log",
-            "level": level,
-            "message": message,
-            "file": source_path,
-        }
-        if source_path:
-            await self._broadcast_to_file(source_path, payload)
-        else:
-            await self._broadcast(payload)
 
     async def send_chat(self, user_id: str, text: str, timestamp: int):
         """Broadcast chat message."""
         if user_id not in self.users:
             return
         user = self.users[user_id]
-        await self._broadcast({
+        await self.broadcast({
             "type": "chat",
             "userId": user_id,
             "name": user.name,
@@ -205,7 +188,7 @@ class DocumentHub:
             return
         self.users[user_id].name = name
         u = self.users[user_id]
-        await self._broadcast({
+        await self.broadcast({
             "type": "user_updated",
             "user": {
                 "id": user_id,
@@ -229,7 +212,7 @@ class DocumentHub:
             if u.current_file == path
         ]
 
-    async def _broadcast(self, message: dict, exclude: str = None):
+    async def broadcast(self, message: dict, exclude: str = None):
         msg_json = json.dumps(message)
         for user_id, user in list(self.users.items()):
             if user_id == exclude:
@@ -239,7 +222,7 @@ class DocumentHub:
             except Exception:
                 pass
 
-    async def _broadcast_to_file(self, path: str, message: dict, exclude: str = None):
+    async def broadcast_to_file(self, path: str, message: dict, exclude: str = None):
         msg_json = json.dumps(message)
         for user_id, user in list(self.users.items()):
             if user_id == exclude or user.current_file != path:
@@ -248,7 +231,3 @@ class DocumentHub:
                 await user.websocket.send_text(msg_json)
             except Exception:
                 pass
-
-
-# Global instance
-document_hub = DocumentHub()
