@@ -23,7 +23,7 @@ Per-plugin settings from the project: `[plugin.myplugin]` -> `ctx.settings`.
 | `actions()` | `Action(id, label, run(ctx, params), icon, description, custom_ui)`; `POST /api/actions/<id>`; progress via `{"type": "action_progress", action, completed, total, message}`. Generic page unless `custom_ui`. |
 | `settings_pages()` | `SettingsPage(id, title, fields, load, save)` for schema forms at `/api/settings/<id>` (field types text/textarea/number/boolean/select/list), or `custom=True` with your own JS + routes. |
 | `mcp_tools()` | `McpTool(name, description, input_schema, handler(ctx, args))`; returns text or MCP content blocks. |
-| `languages()` | `Language(id, extensions, aliases, monarch, configuration)`; data only in Phase 1. |
+| `languages()` | `Language(id, extensions, aliases, monarch, configuration)`: Monarch grammar plus language configuration as JSON data.  The frontend registers it with Monaco and opens files with those extensions in it (it wins over Monaco's own mapping).  Built in already: all of Monaco's languages, LaTeX (`.tex .sty .cls`), TOML, JSON.  See `noteworthy/syncworthy_plugin/typst_grammar.py` for a full grammar. |
 | `branding()` | dict merged over defaults: `name`, `title`, `welcome_text`, `welcome_logo`, `new_file_name`, `new_file_dir`, `file_icons` (ext -> svg), `tree_top`, `tree_bottom`, `themes`, `base_theme`, `info`. |
 | `routers()` | FastAPI routers, mounted before the static catch-all. |
 | `configure(ctx)`, `async on_startup(ctx)`, `async on_shutdown(ctx)` | lifecycle; `ctx.loop` is set from startup on. |
@@ -44,7 +44,23 @@ Syncworthy.registerPlugin('name', mixin, {
   fileOpen(path, app) {},
 });
 Syncworthy.registerSettingsPage('id', { render(container) {}, save() {} });
+Syncworthy.registerLanguage({ id, extensions, aliases, monarch, configuration });  // same shape as Language;
+                                    // here `monarch` may hold real RegExp objects
 ```
 `mixin` is `Object.assign`ed onto `app` (the existing mixin seam), so your methods
 are `app.x()` and inline handlers like `onclick="app.x()"` work.  Branding, preview
 and diagnostics capabilities arrive from `GET /api/app`.
+
+## Messages from the server your bundle may see
+
+On the doc socket (besides chat, presence, cursors, and your own `messages`): the
+file watcher's `{type:"tree_changed"}` (the core refreshes the tree), 
+`{type:"file_renamed", old, new}` (a live room followed an external rename) and
+`{type:"file_removed", path}` (the file behind a live room was deleted).
+
+## Roles
+
+With auth tokens configured, `GET /api/app` carries `auth: {enabled, role}`; `app.state.role`
+is `"edit"` or `"view"` and `app.isReadOnlyRole()` says which.  A `view` client's non-GET
+requests are refused except `POST /api/check`; if a route of yours only reads but is a POST,
+the server cannot know, so keep read-only data on GET.

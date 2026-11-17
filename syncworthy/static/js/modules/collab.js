@@ -108,6 +108,25 @@
                     this.addChatMessage(msg);
                     break;
 
+                // ---- The file watcher: the project changed on disk ----
+                case 'tree_changed':
+                    this._scheduleTreeRefresh();
+                    break;
+
+                case 'file_renamed':       // a live room followed its file to a new path
+                    if (this._handlePathMoved) this._handlePathMoved(msg.old, msg.new);
+                    break;
+
+                case 'file_removed': {     // the file behind a live room was deleted
+                    const active = this.state.activeFile;
+                    if (active && (active === msg.path || active.startsWith(msg.path + '/'))) {
+                        this._closeActiveEditor();
+                        this.showSaveStatus('File deleted on disk');
+                    }
+                    this._scheduleTreeRefresh();
+                    break;
+                }
+
                 // ---- Diagnostics ----
                 case 'diagnostics':
                     this.applyDiagnostics(msg.diagnostics);
@@ -140,6 +159,12 @@
                         console.warn('[Doc] Unknown message type:', msg.type);
                     }
             }
+        },
+
+        // Several events arrive together (a directory moved, a checkout): one refresh.
+        _scheduleTreeRefresh: function () {
+            clearTimeout(this._treeRefreshTimer);
+            this._treeRefreshTimer = setTimeout(() => this.refreshTree(), 150);
         },
 
         _onlineUsersRenderPending: false,

@@ -2280,3 +2280,8 @@ select option {
 #page-editor.no-preview #editor-resizer {
     display: none;
 }
+
+/* A `view` token is read-only: hide what would only be refused. */
+body.role-view #new-dropdown,
+body.role-view .sidebar-actions [title="Upload Files"],
+body.role-view #file-context-menu { display: none !important; }

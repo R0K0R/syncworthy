@@ -5,13 +5,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Syncworthy</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="css/main.css?v=9">
     <link rel="stylesheet" href="css/collab.css">
     <script src="https://unpkg.com/lucide@latest"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=EB+Garamond:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+    <!-- Monaco workers: the editor worker only (language services are switched off, see languages.js) -->
+    <script>
+        self.MonacoEnvironment = {
+            getWorker: function (_id, label) {
+                return new Worker('vendor/monaco-editor.worker.mjs', { type: 'module', name: label });
+            }
+        };
+    </script>
     <!-- Yjs CRDT for collaborative editing -->
     <script type="module">
         // Served from vendor/ rather than a CDN: a browser that blocks
@@ -21,7 +29,12 @@
         import * as Y from './vendor/yjs.mjs';
         import { WebsocketProvider } from './vendor/y-websocket.mjs';
         import { MonacoBinding } from './vendor/y-monaco.mjs';
+        // The ONE Monaco.  y-monaco imports the same module (its editor.api
+        // import is rewired onto this file), so the binding, decorations and
+        // the editor the app creates all share one instance.
+        import * as monaco from './vendor/monaco.mjs';
 
+        window.monaco = monaco;
         window.Y = Y;
         window.WebsocketProvider = WebsocketProvider;
         window.MonacoBinding = MonacoBinding;
@@ -190,6 +203,7 @@
          bundles are loaded after these, from /plugins/<name>/, by app.boot(). -->
     <script src="js/modules/utils.js"></script>
     <script src="js/modules/plugin_api.js"></script>
+    <script src="js/modules/languages.js"></script>
     <script src="js/modules/file_tree.js"></script>
     <script src="js/modules/collab.js"></script>
     <script src="js/modules/settings.js"></script>

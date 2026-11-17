@@ -182,10 +182,13 @@ class McpTool:
 
 @dataclass
 class Language:
-    """Monaco language data (served in ``/api/app``; consumed by the frontend in a later phase).
+    """A language for the editor, as data (served in ``/api/app``, registered by the frontend).
 
-    ``monarch`` is a Monaco Monarch tokenizer definition, ``configuration`` a
-    language configuration (comments, brackets).  Phase 1 only carries the data.
+    ``extensions`` (with the dot) map files to it; ``monarch`` is a Monaco Monarch
+    tokenizer definition and ``configuration`` a language configuration (comments,
+    brackets, auto-closing pairs...), both as JSON-able dicts -- a regex is a string
+    in them (Monarch takes strings as regex sources; ``configuration.wordPattern``
+    and ``folding.markers`` are turned into RegExps by the frontend).
     """
     id: str
     extensions: list[str]

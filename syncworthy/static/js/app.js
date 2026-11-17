@@ -4,6 +4,7 @@
  * Module files loaded first (see index.html), in order:
  *   js/modules/utils.js       - Shared helpers
  *   js/modules/plugin_api.js  - window.Syncworthy: what plugin bundles register with
+ *   js/modules/languages.js   - Language registry: extension -> Monaco language
  *   js/modules/file_tree.js   - File tree & file CRUD
  *   js/modules/collab.js      - WebSocket, cursors, user presence, diagnostics markers
  *   js/modules/settings.js    - Settings tabs (plugin pages + Session/Info)
@@ -55,6 +56,9 @@ const app = {
             this.state.appInfo = { name: 'Syncworthy', branding: { name: 'Syncworthy', info: {}, file_icons: {} }, plugins: [], settings_pages: [], actions: [] };
         }
         document.title = this.brand().title || this.brand().name;
+        // A `view` token is read-only: the editor says so (the server drops its writes regardless).
+        this.state.role = (this.state.appInfo.auth && this.state.appInfo.auth.role) || 'edit';
+        document.body.classList.toggle('role-view', this.state.role === 'view');
         for (const p of this.state.appInfo.plugins || []) {
             if (!p.base) continue;
             for (const href of p.styles || []) {
@@ -82,6 +86,7 @@ const app = {
         // Wire in module mixins
         Object.assign(this, window._utilsMixin || {});
         Object.assign(this, window._pluginApiMixin || {});
+        Object.assign(this, window._languagesMixin || {});
         Object.assign(this, window._fileTreeMixin || {});
         Object.assign(this, window._collabMixin || {});
         Object.assign(this, window._settingsMixin || {});
@@ -164,10 +169,13 @@ const app = {
 
     EDITOR_THEMES: null,
 
+    // The one Monaco: the vendored ESM build y-monaco binds to, imported by the
+    // module script in index.html and published as window.monaco.
     _initMonaco: async function () {
+        if (!window.monaco) throw new Error('Monaco did not load (vendor/monaco.mjs)');
         return new Promise((resolve) => {
-            require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } });
-            require(['vs/editor/editor.main'], () => {
+            {
+                this._registerLanguages();
                 this._defineEditorThemes();
                 monaco.editor.setTheme(this.state.editorTheme);
 
@@ -243,7 +251,7 @@ const app = {
 
                 this._setupSmartEditing();
                 resolve();
-            });
+            }
         });
     },
 
@@ -472,6 +480,7 @@ const app = {
         if (this.state.editor) {
             this.state.editor.setValue('');
             this.state.editor.updateOptions({ readOnly: true });
+            this.setEditorLanguage(path);
         }
 
         this.state.ydoc = new Y.Doc();
@@ -488,7 +497,7 @@ const app = {
             console.log('[Yjs] Status: ' + event.status);
             document.getElementById('save-status').textContent = event.status === 'connected' ? 'Live' : 'Offline';
             if (event.status === 'connected' && this.state.editor) {
-                this.state.editor.updateOptions({ readOnly: false });
+                this.state.editor.updateOptions({ readOnly: this.isReadOnlyRole() });
             }
 
             // Hook the underlying WebSocket for raw packet debugging.
@@ -536,8 +545,8 @@ const app = {
         this.state.yjsProvider.on('sync', isSynced => {
             console.log('[Yjs] Sync: ' + isSynced);
             if (isSynced && this.state.editor) {
-                this.state.editor.updateOptions({ readOnly: false });
-                document.getElementById('save-status').textContent = 'Synced';
+                this.state.editor.updateOptions({ readOnly: this.isReadOnlyRole() });
+                document.getElementById('save-status').textContent = this.isReadOnlyRole() ? 'Synced (read-only)' : 'Synced';
 
                 // Render existing peers immediately — 'change' only fires for
                 // incremental deltas, not the initial awareness snapshot.
@@ -576,6 +585,10 @@ const app = {
 
         this.joinFile(path);
         this._runPluginHooks('fileOpen', path);
+    },
+
+    isReadOnlyRole: function () {
+        return this.state.role === 'view';
     },
 
     // Does a previewer plugin render this file?
