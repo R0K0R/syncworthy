@@ -24,6 +24,9 @@ def test_index_has_no_second_monaco_and_one_big_bundle():
     html = (STATIC / "index.html").read_text()
     assert "cdnjs" not in html and "loader.min.js" not in html and "require.config" not in (STATIC / "js/app.js").read_text()
     assert "./vendor/monaco.mjs" in html
+    # the ESM bundle injects no CSS of its own: without this the hidden input area shows and the gutter is blank
+    assert 'href="vendor/monaco.css"' in html
+    assert ".monaco-editor .inputarea" in (STATIC / "vendor/monaco.css").read_text()
     big = [p.name for p in (STATIC / "vendor").rglob("*.mjs") if p.stat().st_size > 1_000_000]
     assert big == ["esm.sh_monaco-editor_0.56.0_es2022_esm_vs_editor_editor.main.mjs"], big
 

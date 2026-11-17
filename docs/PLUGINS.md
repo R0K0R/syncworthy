@@ -61,6 +61,6 @@ file watcher's `{type:"tree_changed"}` (the core refreshes the tree),
 ## Roles
 
 With auth tokens configured, `GET /api/app` carries `auth: {enabled, role}`; `app.state.role`
-is `"edit"` or `"view"` and `app.isReadOnlyRole()` says which.  A `view` client's non-GET
+is `"edit"` or `"view"` and `app.isReadOnlyRole()` says which.  `app.registerPage` does not add a page for a `view` user unless the spec has `viewable: true`.  A `view` client's non-GET
 requests are refused except `POST /api/check`; if a route of yours only reads but is a POST,
 the server cannot know, so keep read-only data on GET.

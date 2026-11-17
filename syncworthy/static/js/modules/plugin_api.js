@@ -37,8 +37,12 @@
     // The core app mixes this in (window._pluginApiMixin): page registration and
     // the hook runners app.js calls.
     window._pluginApiMixin = {
-        // Add a dock page.  {id, label, icon, html, onShow}
+        // Add a dock page.  {id, label, icon, html, onShow, viewable}
+        // A page is assumed to act (build, save...), which the server refuses a
+        // read-only (`view`) token, so it is not offered to one unless the plugin
+        // says `viewable: true`.
         registerPage: function (spec) {
+            if (this.state.role === 'view' && !spec.viewable) return;
             const main = document.querySelector('.main-content');
             const dock = document.querySelector('.dock');
             if (!main || !dock || document.getElementById('page-' + spec.id)) return;
