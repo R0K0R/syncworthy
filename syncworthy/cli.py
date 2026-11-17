@@ -21,6 +21,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="load a plugin (entry-point name or module:attr) in addition "
                             "to those in syncworthy.toml; repeatable")
 
+    serve.add_argument("--insecure-open", action="store_true",
+                       help="allow serving with no auth tokens on a non-loopback address "
+                            "(anyone who can reach the port can edit the project)")
+
     sub.add_parser("plugins", help="list installed plugins (entry-point group syncworthy.plugins)")
 
     args = parser.parse_args(argv)
@@ -41,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.load(args.project)
     config.plugins += [p for p in args.plugin if p not in config.plugins]
     run_server(args.project, host=args.bind, port=args.port, open_browser=not args.headless,
-               packet_log=args.packet_log, config=config)
+               packet_log=args.packet_log, config=config, insecure_open=args.insecure_open)
     return 0
 
 

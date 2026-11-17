@@ -13,6 +13,11 @@ defaults.  Example::
     token_env = "SYNCWORTHY_MCP_TOKEN"  # env var holding the bearer token
                                         # (NAME_FILE names a file holding it instead)
 
+    watch = true                        # watch the directory for external edits (default)
+
+    [auth]                              # see auth.py; no literal secrets here
+    tokens = [{ name = "me", token_env = "SYNCWORTHY_TOKEN_ME", role = "edit" }]
+
     [branding]
     name = "My Notes"
 
@@ -54,6 +59,10 @@ class Config:
     state_dir: str | None = None          # None: decide (see module docstring)
     mcp_token_env: str | None = None      # None: plugin's, else the default
     branding: dict = field(default_factory=dict)
+    watch: bool = True                    # the file watcher (watcher.py)
+    watch_poll: bool = False              # poll instead of inotify (network filesystems)
+    auth_tokens: list[dict] = field(default_factory=list)       # see auth.py
+    auth_allowed_origins: list[str] = field(default_factory=list)
     plugin_settings: dict[str, dict] = field(default_factory=dict)
     path: Path | None = None              # the file it came from, if any
 
@@ -72,6 +81,7 @@ class Config:
     def from_dict(cls, data: dict, path: Path | None = None) -> "Config":
         mcp = data.get("mcp") or {}
         roots = data.get("roots")
+        auth = data.get("auth") or {}
         return cls(
             plugins=[str(p) for p in data.get("plugins", [])],
             ignore=[str(p) for p in data.get("ignore", [])],
@@ -81,6 +91,10 @@ class Config:
             state_dir=data.get("state_dir"),
             mcp_token_env=mcp.get("token_env"),
             branding=dict(data.get("branding") or {}),
+            watch=bool(data.get("watch", True)),
+            watch_poll=bool(data.get("watch_poll", False)),
+            auth_tokens=[dict(t) for t in auth.get("tokens", [])],
+            auth_allowed_origins=[str(o) for o in auth.get("allowed_origins", [])],
             plugin_settings={k: dict(v) for k, v in (data.get("plugin") or {}).items()},
             path=path,
         )

@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from pycrdt import Text
 
 from . import plugins as plugin_api
+from .auth import Auth, AuthMiddleware
 from .config import DEFAULT_IGNORE, DEFAULT_MCP_TOKEN_ENV, Config, resolve_state_dir
 from .files import TEXT_SUFFIXES, IgnoreRules, resolve_in_project, scan_tree
 from .hub import Hub
@@ -33,6 +34,7 @@ from .mcp import McpServer, authorize, expected_token
 from .plugins import PluginContext
 from .rooms import RoomManager
 from .state import AppState
+from .watcher import Watcher
 
 log = logging.getLogger("syncworthy")
 
@@ -90,12 +92,15 @@ def _merge_branding(plugins: list, config: Config) -> dict:
 
 
 def create_app(project_root, config: Config | None = None, plugins: list | None = None,
-               packet_log: bool | None = None) -> FastAPI:
+               packet_log: bool | None = None, auth: Auth | None = None,
+               watch: bool | None = None) -> FastAPI:
     """Build the app for PROJECT_ROOT.
 
     CONFIG defaults to ``syncworthy.toml`` in the project (or the defaults).
     PLUGINS, if given, is the exact list of plugin objects to use; if None they
-    are discovered from ``config.plugins``.
+    are discovered from ``config.plugins``.  AUTH defaults to the tokens in the
+    config and environment (none: open, which ``run_server`` only allows on a
+    loopback bind); WATCH overrides ``config.watch``.
     """
     root = Path(project_root).resolve()
     if not root.is_dir():
@@ -131,6 +136,7 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
                           if plugin_api.get(p, "mcp_token_env")), None)
                  or DEFAULT_MCP_TOKEN_ENV)
 
+    auth = auth if auth is not None else Auth.from_config(config)
     rooms = RoomManager(root, state_dir, packet_log=packet_log)
     hub = Hub()
     state = AppState(
@@ -139,8 +145,9 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
         tree_ignore=IgnoreRules(ignore_patterns + tree_patterns),
         roots=roots, create_roots=create_roots, text_suffixes=text_suffixes,
         mcp_token_env=token_env, app_name=branding["name"],
-        plugins=list(plugins), branding=branding,
+        plugins=list(plugins), branding=branding, auth=auth,
     )
+    use_watcher = config.watch if watch is None else watch
 
     # ---- plugin contexts and features ------------------------------------
     for p in plugins:
@@ -193,8 +200,14 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
             await rooms.server.started.wait()
             log.info("Yjs WebSocket Server started and ready")
 
+        if use_watcher:
+            state.watcher = Watcher(state, force_polling=config.watch_poll)
+            await state.watcher.start()
+
         yield
 
+        if state.watcher is not None:
+            await state.watcher.stop()
         if rooms.server:
             log.info("Stopping Yjs WebSocket Server...")
             await rooms.server.stop()
@@ -218,6 +231,7 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
 
     app = FastAPI(title=f"{branding['name']} server", lifespan=lifespan)
     app.state.sync = state
+    app.add_middleware(AuthMiddleware, auth=auth, app_name=branding["name"])
 
     # Yjs WebSocket endpoint
     app.mount("/yjs", rooms.asgi_app())
@@ -350,6 +364,8 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
             return {"success": False, "error": "Invalid path"}
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding='utf-8')
+        # Not noted in the ledger: a write behind a live room's back is exactly
+        # what the file watcher exists to merge into it.
         return {"success": True}
 
     if _MULTIPART_AVAILABLE:
@@ -558,12 +574,13 @@ def create_app(project_root, config: Config | None = None, plugins: list | None 
     # ============================================================
 
     @app.get("/api/app")
-    def app_info():
+    def app_info(request: Request):
         """What the frontend needs to configure itself: branding, plugin bundles, pages."""
         previewer = previewers[0] if previewers else None
         diag = diagnostics_list[0][1] if diagnostics_list else None
         return {
             "name": branding["name"],
+            "auth": {"enabled": auth.enabled, "role": request.scope.get("sw_role", "edit")},
             "branding": branding,
             "project": root.name,
             "plugins": [

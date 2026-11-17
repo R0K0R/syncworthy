@@ -14,7 +14,8 @@ __all__ = ["Action", "Config", "Diagnostics", "Language", "McpTool", "Plugin",
 
 def run_server(project_root, *, host: str = "127.0.0.1", port: int = 8000,
                open_browser: bool = True, packet_log: bool = False,
-               config=None, plugins=None, app_name: str | None = None) -> None:
+               config=None, plugins=None, app_name: str | None = None,
+               insecure_open: bool = False) -> None:
     """Serve PROJECT_ROOT with uvicorn (what ``syncworthy serve`` and ``noteworthy -g`` call)."""
     import logging
     import os
@@ -34,10 +35,14 @@ def run_server(project_root, *, host: str = "127.0.0.1", port: int = 8000,
                         format="[%(levelname)s] %(message)s")
 
     app = create_app(project_root, config=config, plugins=plugins, packet_log=packet_log)
+    from .auth import check_bind
+    check_bind(app.state.sync.auth, host, insecure_open)
     name = app_name or app.state.sync.app_name
     print(f"Starting {name} at http://{host}:{port}")
     print(f"Project: {app.state.sync.root}")
     print(f"Plugins: {', '.join(p.name for p in app.state.sync.plugins) or 'none'}")
+    sync = app.state.sync
+    print(f"Auth: {len(sync.auth.tokens)} token(s)" if sync.auth.enabled else "Auth: none (open)")
     print(f"Yjs packet logging: {'enabled' if packet_log else 'disabled'}")
 
     if open_browser:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .auth import Auth
 from .config import Config
 from .files import IgnoreRules
 from .hub import Hub
@@ -29,3 +30,5 @@ class AppState:
     plugins: list[Any] = field(default_factory=list)
     contexts: dict[str, PluginContext] = field(default_factory=dict)   # by plugin name
     branding: dict = field(default_factory=dict)
+    auth: Auth = field(default_factory=Auth)
+    watcher: Any = None

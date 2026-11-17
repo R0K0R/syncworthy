@@ -11,8 +11,10 @@ passed in (see ``RoomManager``); nothing here knows about a particular kind of
 project.
 """
 import asyncio
+import hashlib
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, Optional
 from pycrdt import Doc, Text
@@ -24,6 +26,52 @@ log = logging.getLogger("syncworthy")
 
 def _env_flag(*names: str) -> bool:
     return any(os.environ.get(n, "").lower() in {"1", "true", "yes", "on"} for n in names)
+
+
+class DiskLedger:
+    """What this server last wrote to (or read from) each file, by content hash.
+
+    The file watcher hears about the server's own atomic saves exactly as it
+    hears about anyone else's writes.  Taking such an echo back into the room
+    would be harmful, not merely wasteful: the room may have moved on since
+    that save (the debounce is a quarter of a second), and re-reading the older
+    disk text would delete what was typed in between.  So every write the
+    server makes is noted here, and the watcher skips an event whose file still
+    holds the content the server last put there.
+
+    Only the latest hash per path is kept: an external write of older content
+    (``git checkout``) must not be mistaken for ours.
+    """
+
+    OWN_TTL = 60.0       # seconds an own write is recognised for
+
+    def __init__(self):
+        self._latest: dict[str, tuple[str, float]] = {}
+
+    @staticmethod
+    def digest(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def note(self, path: str, data: bytes) -> None:
+        self._latest[path] = (self.digest(data), time.monotonic())
+
+    def is_own(self, path: str, data: bytes) -> bool:
+        entry = self._latest.get(path)
+        if entry is None or time.monotonic() - entry[1] > self.OWN_TTL:
+            return False
+        return entry[0] == self.digest(data)
+
+    def last(self, path: str) -> str | None:
+        entry = self._latest.get(path)
+        return entry[0] if entry else None
+
+    def forget(self, path: str) -> None:
+        self._latest.pop(path, None)
+
+    def move(self, old: str, new: str) -> None:
+        entry = self._latest.pop(old, None)
+        if entry is not None:
+            self._latest[new] = entry
 
 
 class _NullLock:
@@ -159,9 +207,11 @@ class SyncRoom(YRoom):
     Each file gets its own room identified by relative file path.
     """
     
-    def __init__(self, room_name: str, root: Path, state_dir: Path, *args, **kwargs):
+    def __init__(self, room_name: str, root: Path, state_dir: Path, *args,
+                 ledger: "DiskLedger | None" = None, **kwargs):
         super().__init__(ready=True, *args, **kwargs)  # Start ready since we load sync
         self.room_name = room_name
+        self._ledger = ledger
         self._root = Path(root)
         self._state_dir = Path(state_dir)
         # Room names come straight off the websocket URL — refuse to build a
@@ -182,6 +232,9 @@ class SyncRoom(YRoom):
         self._save_subscription = None
         self._save_handle: asyncio.TimerHandle | None = None
         self._save_delay = 0.25  # debounce window (seconds)
+        # Set by the file watcher while the file is missing, so a pending save
+        # cannot write a just-deleted (or just-moved) file back into existence.
+        self.suspended = False
         
     def _file_is_newer(self, state: Path) -> bool:
         """True when the text file was written after the CRDT state was."""
@@ -232,6 +285,8 @@ class SyncRoom(YRoom):
         if self._file_path.exists():
             try:
                 content = self._file_path.read_text(encoding='utf-8')
+                if not self._initialized:
+                    self._note_disk(content)
                 if content and len(self._text) == 0:
                     # First load, or a room that opened before the file had
                     # anything in it.
@@ -270,12 +325,19 @@ class SyncRoom(YRoom):
 
         self._initialized = True
     
+    def _note_disk(self, content: str) -> None:
+        """Tell the ledger what the file now holds (see DiskLedger)."""
+        if self._ledger is not None:
+            self._ledger.note(self.room_name, content.encode("utf-8"))
+
     async def save(self):
         """Save content to disk atomically (temp file + rename).
 
         Atomic replace prevents typst watch / tinymist from ever reading a
         partially written file.
         """
+        if self.suspended:
+            return
         text = self.ydoc.get("content", type=Text)
         content = str(text)
 
@@ -283,6 +345,8 @@ class SyncRoom(YRoom):
             self._file_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = self._file_path.with_name(f".{self._file_path.name}.sw-tmp")
             tmp_path.write_text(content, encoding='utf-8')
+            # Noted before the replace: the watcher may hear of it at once.
+            self._note_disk(content)
             os.replace(tmp_path, self._file_path)
             log.debug(f"[YjsRoom] Saved {self.room_name} ({len(content)} chars)")
         except Exception as e:
@@ -335,6 +399,7 @@ class SyncRoom(YRoom):
         except Exception as e:
             log.error(f"[YjsRoom] Could not re-read {self.room_name}: {e}")
             return
+        self._note_disk(content)
         if content == str(self._text):
             return
         with self.ydoc.transaction():
@@ -419,6 +484,7 @@ class RoomManager:
         self.packet_logging = (_env_flag("SYNCWORTHY_PACKET_LOG", "NOTEWORTHY_PACKET_LOG")
                                if packet_log is None else bool(packet_log))
         self._asgi_app = None
+        self.ledger = DiskLedger()
 
     def set_packet_logging(self, enabled: bool):
         """Enable/disable low-level Yjs websocket packet logging."""
@@ -454,7 +520,8 @@ class RoomManager:
         """Create/initialize/start the room. Callers must hold the room lock."""
         if file_path not in self.rooms:
             log.debug(f"[RoomManager] Creating new SyncRoom for {file_path}")
-            room = SyncRoom(room_name=file_path, root=self.root, state_dir=self.state_dir)
+            room = SyncRoom(room_name=file_path, root=self.root, state_dir=self.state_dir,
+                            ledger=self.ledger)
             self.rooms[file_path] = room
         else:
             log.debug(f"[RoomManager] Found existing SyncRoom for {file_path}")
@@ -489,6 +556,7 @@ class RoomManager:
             room = self.rooms.pop(file_path, None)
             if room is None:
                 return
+            self.ledger.forget(file_path)
             if self.server is not None:
                 self.server.rooms.pop(file_path, None)
             log.info(f"[RoomManager] Closing room {file_path}")
@@ -549,6 +617,7 @@ class RoomManager:
                         self.server.rooms.pop(new_path, None)
                     await existing.close()
 
+                self.ledger.move(old_path, new_path)
                 room.rebind(new_path, new_file_path)
                 self.rooms[new_path] = room
                 if self.server is not None:
